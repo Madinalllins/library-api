@@ -1,0 +1,999 @@
+openapi: 3.1.0
+
+info:
+  title: Library API
+  version: 1.0.0
+  description: |
+    API для управления книгами, читателями и выдачами.
+
+    Основные бизнес-правила:
+    - книгу можно выдать только при наличии доступного экземпляра;
+    - у читателя может быть не более пяти активных выдач;
+    - дата возврата новой выдачи должна быть позже текущей даты;
+    - книгу или читателя нельзя удалить при наличии активных выдач;
+    - возврат книги выполняется отдельной операцией POST /loans/{id}/return.
+
+servers:
+  - url: https://api.example.com/v1
+    description: Основной сервер
+
+tags:
+  - name: Books
+    description: Операции с книгами
+  - name: Readers
+    description: Операции с читателями
+  - name: Loans
+    description: Операции с выдачами книг
+
+security:
+  - BearerAuth: []
+
+paths:
+  /books:
+    get:
+      tags:
+        - Books
+      summary: Получить список книг
+      operationId: listBooks
+      parameters:
+        - name: title
+          in: query
+          description: Фильтр по названию книги
+          schema:
+            type: string
+        - name: author
+          in: query
+          description: Фильтр по автору
+          schema:
+            type: string
+        - name: isbn
+          in: query
+          description: Фильтр по ISBN
+          schema:
+            type: string
+        - name: available_only
+          in: query
+          description: Вернуть только книги с доступными экземплярами
+          schema:
+            type: boolean
+            default: false
+        - name: sort
+          in: query
+          description: Поле сортировки
+          schema:
+            type: string
+            enum:
+              - title
+              - author
+              - published_year
+              - total_copies
+              - available_copies
+            default: title
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Список книг
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BookList"
+              examples:
+                books:
+                  summary: Список книг
+                  value:
+                    data:
+                      - id: 1
+                        title: Мастер и Маргарита
+                        author: Михаил Булгаков
+                        isbn: "978-5-17-149256-2"
+                        published_year: 1967
+                        total_copies: 5
+                        available_copies: 3
+                    pagination:
+                      page: 1
+                      limit: 20
+                      total_items: 1
+                      total_pages: 1
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+
+    post:
+      tags:
+        - Books
+      summary: Создать книгу
+      operationId: createBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookInput"
+            examples:
+              new_book:
+                summary: Новая книга
+                value:
+                  title: Мастер и Маргарита
+                  author: Михаил Булгаков
+                  isbn: "978-5-17-149256-2"
+                  published_year: 1967
+                  total_copies: 5
+      responses:
+        "201":
+          description: Книга создана
+          headers:
+            Location:
+              description: Адрес созданной книги
+              schema:
+                type: string
+                example: /books/1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+              examples:
+                created_book:
+                  summary: Созданная книга
+                  value:
+                    id: 1
+                    title: Мастер и Маргарита
+                    author: Михаил Булгаков
+                    isbn: "978-5-17-149256-2"
+                    published_year: 1967
+                    total_copies: 5
+                    available_copies: 5
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /books/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+
+    get:
+      tags:
+        - Books
+      summary: Получить книгу по идентификатору
+      operationId: getBook
+      responses:
+        "200":
+          description: Информация о книге
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags:
+        - Books
+      summary: Полностью обновить книгу
+      operationId: updateBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BookInput"
+      responses:
+        "200":
+          description: Книга обновлена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Book"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    delete:
+      tags:
+        - Books
+      summary: Удалить книгу
+      description: Книгу нельзя удалить, если у неё есть активные выдачи.
+      operationId: deleteBook
+      responses:
+        "204":
+          description: Книга удалена
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/BusinessRuleViolation"
+
+  /readers:
+    get:
+      tags:
+        - Readers
+      summary: Получить список читателей
+      operationId: listReaders
+      parameters:
+        - name: full_name
+          in: query
+          description: Фильтр по имени читателя
+          schema:
+            type: string
+        - name: email
+          in: query
+          description: Фильтр по электронной почте
+          schema:
+            type: string
+            format: email
+        - name: sort
+          in: query
+          description: Поле сортировки
+          schema:
+            type: string
+            enum:
+              - full_name
+              - email
+              - registered_at
+            default: full_name
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Список читателей
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReaderList"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+
+    post:
+      tags:
+        - Readers
+      summary: Зарегистрировать читателя
+      operationId: createReader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReaderInput"
+            examples:
+              new_reader:
+                summary: Новый читатель
+                value:
+                  full_name: Анна Смирнова
+                  email: anna.smirnova@example.com
+      responses:
+        "201":
+          description: Читатель зарегистрирован
+          headers:
+            Location:
+              description: Адрес созданного читателя
+              schema:
+                type: string
+                example: /readers/10
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reader"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /readers/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+
+    get:
+      tags:
+        - Readers
+      summary: Получить читателя по идентификатору
+      operationId: getReader
+      responses:
+        "200":
+          description: Информация о читателе
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reader"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+    put:
+      tags:
+        - Readers
+      summary: Полностью обновить читателя
+      operationId: updateReader
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReaderInput"
+      responses:
+        "200":
+          description: Данные читателя обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Reader"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+    delete:
+      tags:
+        - Readers
+      summary: Удалить читателя
+      description: Читателя нельзя удалить при наличии активных выдач.
+      operationId: deleteReader
+      responses:
+        "204":
+          description: Читатель удалён
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/BusinessRuleViolation"
+
+  /loans:
+    get:
+      tags:
+        - Loans
+      summary: Получить список выдач
+      description: Для получения просроченных выдач используется status=overdue.
+      operationId: listLoans
+      parameters:
+        - name: status
+          in: query
+          description: Статус выдачи
+          schema:
+            type: string
+            enum:
+              - active
+              - returned
+              - overdue
+        - name: book_id
+          in: query
+          description: Фильтр по книге
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: reader_id
+          in: query
+          description: Фильтр по читателю
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: sort
+          in: query
+          description: Поле сортировки
+          schema:
+            type: string
+            enum:
+              - loaned_at
+              - due_date
+              - returned_at
+            default: loaned_at
+        - $ref: "#/components/parameters/SortOrder"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Список выдач
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanList"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+
+    post:
+      tags:
+        - Loans
+      summary: Выдать книгу читателю
+      description: |
+        Книга выдаётся только при available_copies > 0.
+
+        У читателя может быть не более пяти активных выдач.
+        Активной считается выдача, у которой returned_at равен null.
+        due_date должна быть позже текущей даты.
+
+        Idempotency-Key хранится 24 часа. Повторный запрос с тем же ключом
+        и тем же телом получает полный повтор исходного ответа: HTTP-код,
+        заголовки и тело. Если с тем же ключом передано другое тело,
+        сервер возвращает 409 с кодом IDEMPOTENCY_MISMATCH.
+
+        Конкурентные запросы с одинаковым ключом не создают несколько выдач.
+        Только один запрос создаёт выдачу, остальные ожидают результат
+        и получают повтор сохранённого ответа.
+      operationId: createLoan
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: Уникальный ключ запроса, сохраняемый сервером на 24 часа
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+          example: 7e7f2bc9-919c-4422-9de3-98c76af79013
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoanCreateRequest"
+            examples:
+              new_loan:
+                summary: Новая выдача
+                value:
+                  book_id: 1
+                  reader_id: 10
+                  due_date: "2026-11-21"
+      responses:
+        "201":
+          description: Выдача создана
+          headers:
+            Location:
+              description: Адрес созданной выдачи
+              schema:
+                type: string
+                example: /loans/100
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+              examples:
+                created_loan:
+                  summary: Созданная выдача
+                  value:
+                    id: 100
+                    book_id: 1
+                    reader_id: 10
+                    loaned_at: "2026-11-07T11:00:00Z"
+                    due_date: "2026-11-21"
+                    returned_at: null
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/LoanConflict"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /loans/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+
+    get:
+      tags:
+        - Loans
+      summary: Получить выдачу по идентификатору
+      operationId: getLoan
+      responses:
+        "200":
+          description: Информация о выдаче
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /loans/{id}/return:
+    parameters:
+      - $ref: "#/components/parameters/ResourceId"
+
+    post:
+      tags:
+        - Loans
+      summary: Оформить возврат книги
+      description: |
+        Операция устанавливает returned_at и увеличивает available_copies.
+        Повторный возврат уже возвращённой книги приводит к конфликту.
+      operationId: returnLoan
+      responses:
+        "200":
+          description: Возврат оформлен
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Loan"
+              examples:
+                returned_loan:
+                  summary: Возвращённая книга
+                  value:
+                    id: 100
+                    book_id: 1
+                    reader_id: 10
+                    loaned_at: "2026-11-07T11:00:00Z"
+                    due_date: "2026-11-21"
+                    returned_at: "2026-11-18T09:15:00Z"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Авторизация с помощью Bearer JWT
+
+  parameters:
+    ResourceId:
+      name: id
+      in: path
+      required: true
+      description: Идентификатор ресурса
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+
+    Page:
+      name: page
+      in: query
+      description: Номер страницы
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+
+    Limit:
+      name: limit
+      in: query
+      description: Количество элементов на странице
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+
+    SortOrder:
+      name: order
+      in: query
+      description: Направление сортировки
+      schema:
+        type: string
+        enum:
+          - asc
+          - desc
+        default: asc
+
+  schemas:
+    Book:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - title
+        - author
+        - isbn
+        - published_year
+        - total_copies
+        - available_copies
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 1
+        title:
+          type: string
+          minLength: 1
+          example: Мастер и Маргарита
+        author:
+          type: string
+          minLength: 1
+          example: Михаил Булгаков
+        isbn:
+          type: string
+          example: "978-5-17-149256-2"
+        published_year:
+          type: integer
+          minimum: 0
+          example: 1967
+        total_copies:
+          type: integer
+          minimum: 0
+          example: 5
+        available_copies:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: |
+            Количество доступных экземпляров. Сервер вычисляет значение
+            на основании total_copies и количества активных выдач.
+            Клиент не передаёт это поле.
+          example: 3
+
+    BookInput:
+      type: object
+      additionalProperties: false
+      required:
+        - title
+        - author
+        - isbn
+        - published_year
+        - total_copies
+      properties:
+        title:
+          type: string
+          minLength: 1
+          example: Мастер и Маргарита
+        author:
+          type: string
+          minLength: 1
+          example: Михаил Булгаков
+        isbn:
+          type: string
+          minLength: 10
+          maxLength: 17
+          example: "978-5-17-149256-2"
+        published_year:
+          type: integer
+          minimum: 0
+          example: 1967
+        total_copies:
+          type: integer
+          minimum: 0
+          example: 5
+
+    Reader:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - full_name
+        - email
+        - registered_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 10
+        full_name:
+          type: string
+          minLength: 1
+          example: Анна Смирнова
+        email:
+          type: string
+          format: email
+          example: anna.smirnova@example.com
+        registered_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-11-07T10:30:00Z"
+
+    ReaderInput:
+      type: object
+      additionalProperties: false
+      required:
+        - full_name
+        - email
+      properties:
+        full_name:
+          type: string
+          minLength: 1
+          example: Анна Смирнова
+        email:
+          type: string
+          format: email
+          example: anna.smirnova@example.com
+
+    Loan:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - book_id
+        - reader_id
+        - loaned_at
+        - due_date
+        - returned_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+          example: 100
+        book_id:
+          type: integer
+          format: int64
+          example: 1
+        reader_id:
+          type: integer
+          format: int64
+          example: 10
+        loaned_at:
+          type: string
+          format: date-time
+          readOnly: true
+          example: "2026-11-07T11:00:00Z"
+        due_date:
+          type: string
+          format: date
+          example: "2026-11-21"
+        returned_at:
+          type:
+            - string
+            - "null"
+          format: date-time
+          readOnly: true
+          description: Дата возврата или null, если книга ещё не возвращена
+          example: null
+
+    LoanCreateRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - book_id
+        - reader_id
+        - due_date
+      properties:
+        book_id:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 1
+        reader_id:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 10
+        due_date:
+          type: string
+          format: date
+          description: Дата должна быть позже текущей даты
+          example: "2026-11-21"
+
+    Pagination:
+      type: object
+      additionalProperties: false
+      required:
+        - page
+        - limit
+        - total_items
+        - total_pages
+      properties:
+        page:
+          type: integer
+          minimum: 1
+          example: 1
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 100
+          example: 20
+        total_items:
+          type: integer
+          minimum: 0
+          example: 42
+        total_pages:
+          type: integer
+          minimum: 0
+          example: 3
+
+    BookList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Book"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    ReaderList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Reader"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    LoanList:
+      type: object
+      additionalProperties: false
+      required:
+        - data
+        - pagination
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Loan"
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+
+    ErrorDetail:
+      type: object
+      additionalProperties: false
+      required:
+        - message
+      properties:
+        field:
+          type:
+            - string
+            - "null"
+          example: due_date
+        message:
+          type: string
+          example: Дата должна быть позже текущей даты
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - code
+        - message
+        - request_id
+      properties:
+        code:
+          type: string
+          enum:
+            - INVALID_REQUEST
+            - NOT_FOUND
+            - VALIDATION_ERROR
+            - CONFLICT
+            - BUSINESS_RULE_VIOLATION
+            - IDEMPOTENCY_MISMATCH
+          example: VALIDATION_ERROR
+        message:
+          type: string
+          example: Переданные данные не прошли проверку
+        request_id:
+          type: string
+          format: uuid
+          example: 2d7526bb-08c8-4210-bc6f-b1bb4645a71f
+        details:
+          type: array
+          items:
+            $ref: "#/components/schemas/ErrorDetail"
+          default: []
+
+  responses:
+    InvalidRequest:
+      description: Запрос имеет неправильный формат
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalid_request:
+              summary: Некорректный запрос
+              value:
+                code: INVALID_REQUEST
+                message: Параметр limit имеет неправильный формат
+                request_id: 2d7526bb-08c8-4210-bc6f-b1bb4645a71f
+                details:
+                  - field: limit
+                    message: Ожидалось целое число
+
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            not_found:
+              summary: Ресурс не найден
+              value:
+                code: NOT_FOUND
+                message: Запрошенный ресурс не найден
+                request_id: a5a89d41-f7cf-4345-a7b7-28ffd93c0190
+                details: []
+
+    ValidationError:
+      description: Данные не прошли проверку
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalid_due_date:
+              summary: Неправильная дата возврата
+              value:
+                code: VALIDATION_ERROR
+                message: Переданные данные не прошли проверку
+                request_id: 893d6412-afba-4e43-8a73-2ccbcc25362a
+                details:
+                  - field: due_date
+                    message: Дата должна быть позже текущей даты
+
+    Conflict:
+      description: Операция конфликтует с текущим состоянием ресурса
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            conflict:
+              summary: Конфликт состояния
+              value:
+                code: CONFLICT
+                message: Операция конфликтует с текущим состоянием ресурса
+                request_id: 27b857e7-dc92-4e4c-a556-c4526085823e
+                details: []
+
+    BusinessRuleViolation:
+      description: Нарушено бизнес-правило
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            active_loans:
+              summary: Есть активные выдачи
+              value:
+                code: BUSINESS_RULE_VIOLATION
+                message: Ресурс нельзя удалить при наличии активных выдач
+                request_id: 476e1bf4-6dc0-4a74-92bb-c35ec56b9afa
+                details: []
+
+    LoanConflict:
+      description: Выдача невозможна из-за конфликта или нарушения бизнес-правила
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            no_available_copies:
+              summary: Нет доступных экземпляров
+              value:
+                code: BUSINESS_RULE_VIOLATION
+                message: Нет доступных экземпляров книги
+                request_id: 40ecc2f4-08c7-4afc-8d43-257de4c4aa5b
+                details:
+                  - field: book_id
+                    message: available_copies должно быть больше нуля
+            active_loan_limit:
+              summary: Превышен лимит активных выдач
+              value:
+                code: BUSINESS_RULE_VIOLATION
+                message: У читателя уже есть пять активных выдач
+                request_id: 31cc9354-11c7-472b-9c26-e60149ed86c6
+                details:
+                  - field: reader_id
+                    message: Допускается не более пяти активных выдач
+            idempotency_mismatch:
+              summary: Ключ использован с другим телом запроса
+              value:
+                code: IDEMPOTENCY_MISMATCH
+                message: Idempotency-Key уже использован с другим телом запроса
+                request_id: 9d355278-0488-46df-a6d3-c0d762a422ea
+                details:
+                  - field: Idempotency-Key
+                    message: Используйте новый ключ для другого запроса
